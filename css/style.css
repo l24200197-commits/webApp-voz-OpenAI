@@ -1,0 +1,10 @@
+body {
+  background: linear-gradient(135deg, #1f2933, #111827);
+  color: white;
+  height: 100vh;
+}
+
+#command {
+  font-size: 2rem;
+  margin-top: 40px;
+}
