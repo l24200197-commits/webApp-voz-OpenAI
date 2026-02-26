@@ -1,7 +1,6 @@
 const statusBadge = document.getElementById("status");
 const commandText = document.getElementById("command");
 
-let silenceTimer;
 let OPENAI_KEY = null;
 let selectedVoice = null;
 let isSpeaking = false;
@@ -15,10 +14,10 @@ recognition.continuous = true;
 recognition.interimResults = false;
 
 /* ======================================================
-   🎙 VOZ
+   🎙 CARGAR VOCES CORRECTAMENTE
 ====================================================== */
 
-window.speechSynthesis.onvoiceschanged = () => {
+function loadVoices() {
   const voices = speechSynthesis.getVoices();
 
   selectedVoice = voices.find(v =>
@@ -33,7 +32,13 @@ window.speechSynthesis.onvoiceschanged = () => {
   if (!selectedVoice) {
     selectedVoice = voices.find(v => v.lang.includes("es"));
   }
-};
+}
+
+speechSynthesis.onvoiceschanged = loadVoices;
+
+/* ======================================================
+   🎤 SPEAK ESTABLE
+====================================================== */
 
 function speak(text) {
 
@@ -41,39 +46,62 @@ function speak(text) {
     recognition.stop();
   }
 
-  const speech = new SpeechSynthesisUtterance(text);
-  speech.lang = "es-MX";
+  const waitForVoices = setInterval(() => {
 
-  if (selectedVoice) {
-    speech.voice = selectedVoice;
-  }
+    const voices = speechSynthesis.getVoices();
 
-  speech.rate = 0.85;
-  speech.pitch = 0.6;
-  speech.volume = 1;
+    if (voices.length > 0) {
 
-  isSpeaking = true;
+      clearInterval(waitForVoices);
+      loadVoices();
 
-  speech.onend = () => {
-    isSpeaking = false;
-    safeRestartRecognition();
-  };
+      const speech = new SpeechSynthesisUtterance(text);
+      speech.lang = "es-MX";
 
-  window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(speech);
+      if (selectedVoice) {
+        speech.voice = selectedVoice;
+      }
+
+      speech.rate = 0.85;
+      speech.pitch = 0.6;
+
+      isSpeaking = true;
+
+      speech.onend = () => {
+        isSpeaking = false;
+        safeRestartRecognition();
+      };
+
+      speechSynthesis.cancel();
+      speechSynthesis.speak(speech);
+    }
+
+  }, 100);
 }
 
 /* ======================================================
-   🚀 INICIALIZAR
+   🚀 INICIALIZAR SOLO DESPUÉS DE CLICK
 ====================================================== */
 
-initApp();
-
 async function initApp() {
+
   await loadApiKey();
-  safeRestartRecognition();
-  updateStatus("ESCUCHANDO", "success");
+
+  try {
+    recognition.start();
+    recognitionActive = true;
+    updateStatus("ESCUCHANDO", "success");
+  } catch (e) {
+    console.log("Ya iniciado");
+  }
 }
+
+// 🔥 ESTE ES EL CAMBIO CLAVE
+window.addEventListener("click", () => {
+  if (!recognitionActive) {
+    initApp();
+  }
+}, { once: true });
 
 /* ======================================================
    🔐 API KEY
@@ -88,7 +116,7 @@ async function loadApiKey() {
       OPENAI_KEY = data[0].apikey;
     }
   } catch (error) {
-    console.error("Error obteniendo API key:", error);
+    console.error("Error API key:", error);
   }
 }
 
@@ -98,12 +126,10 @@ async function loadApiKey() {
 
 recognition.onstart = () => {
   recognitionActive = true;
-  console.log("🎤 Micrófono activo");
 };
 
 recognition.onend = () => {
   recognitionActive = false;
-  console.log("🔁 Reiniciando reconocimiento...");
 
   if (!isSpeaking) {
     setTimeout(() => {
@@ -113,7 +139,7 @@ recognition.onend = () => {
 };
 
 recognition.onerror = (event) => {
-  console.log("⚠ Error reconocimiento:", event.error);
+  console.log("Error reconocimiento:", event.error);
 
   if (event.error !== "not-allowed") {
     safeRestartRecognition();
@@ -128,7 +154,6 @@ recognition.onresult = async (event) => {
 
   console.log("🎤", transcript);
 
-  // Presentación
   if (
     transcript.includes("hola antonio") ||
     transcript.includes("quién eres") ||
@@ -143,7 +168,7 @@ Puedo avanzar, retroceder, detener,
 y realizar giros de noventa o trescientos sesenta grados.
 `;
 
-    commandText.textContent = "Presentación del asistente";
+    commandText.textContent = "Presentación";
     speak(intro);
     return;
   }
@@ -161,9 +186,8 @@ y realizar giros de noventa o trescientos sesenta grados.
 function safeRestartRecognition() {
   try {
     recognition.start();
-  } catch (e) {
-    console.log("Ya estaba iniciado");
-  }
+    recognitionActive = true;
+  } catch (e) {}
 }
 
 function updateStatus(text, color) {
@@ -176,6 +200,7 @@ function updateStatus(text, color) {
 ====================================================== */
 
 async function sendToOpenAI(text) {
+
   if (!OPENAI_KEY) {
     return "Orden no reconocida";
   }
@@ -193,9 +218,7 @@ async function sendToOpenAI(text) {
           {
             role: "system",
             content: `
-Eres un sistema que interpreta órdenes de movimiento.
-
-Convierte cualquier frase natural en UNO de estos comandos EXACTOS:
+Convierte la frase en UNO de estos comandos EXACTOS:
 
 avanzar
 retroceder
@@ -207,7 +230,7 @@ vuelta izquierda
 360° derecha
 360° izquierda
 
-Si no coincide, responde:
+Si no coincide responde:
 Orden no reconocida
 `
           },
@@ -222,9 +245,7 @@ Orden no reconocida
     }
 
     const data = await response.json();
-    const result = data?.choices?.[0]?.message?.content;
-
-    return result ? result.trim() : "Orden no reconocida";
+    return data?.choices?.[0]?.message?.content?.trim() || "Orden no reconocida";
 
   } catch (error) {
     console.error("Error OpenAI:", error);
