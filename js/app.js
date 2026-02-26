@@ -1,10 +1,11 @@
 const statusBadge = document.getElementById("status");
 const commandText = document.getElementById("command");
 
-let active = true;
 let silenceTimer;
 let OPENAI_KEY = null;
 let selectedVoice = null;
+let isSpeaking = false;
+let recognitionActive = false;
 
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 const recognition = new SpeechRecognition();
@@ -14,13 +15,12 @@ recognition.continuous = true;
 recognition.interimResults = false;
 
 /* ======================================================
-   🤠 VOZ ESTILO RANCHO
+   🎙 VOZ
 ====================================================== */
 
 window.speechSynthesis.onvoiceschanged = () => {
   const voices = speechSynthesis.getVoices();
 
-  // Intentar voz masculina en español
   selectedVoice = voices.find(v =>
     v.lang.includes("es") &&
     (
@@ -30,15 +30,17 @@ window.speechSynthesis.onvoiceschanged = () => {
     )
   );
 
-  // Si no encuentra masculina, usar cualquier voz en español
   if (!selectedVoice) {
     selectedVoice = voices.find(v => v.lang.includes("es"));
   }
-
-  console.log("🎙 Voz seleccionada:", selectedVoice?.name);
 };
 
 function speak(text) {
+
+  if (recognitionActive) {
+    recognition.stop();
+  }
+
   const speech = new SpeechSynthesisUtterance(text);
   speech.lang = "es-MX";
 
@@ -46,11 +48,18 @@ function speak(text) {
     speech.voice = selectedVoice;
   }
 
-  // Ajustes rancheros
-  speech.rate = 0.85;   // más pausado
-  speech.pitch = 0.30 // más grave
+  speech.rate = 0.85;
+  speech.pitch = 0.6;
   speech.volume = 1;
 
+  isSpeaking = true;
+
+  speech.onend = () => {
+    isSpeaking = false;
+    safeRestartRecognition();
+  };
+
+  window.speechSynthesis.cancel();
   window.speechSynthesis.speak(speech);
 }
 
@@ -62,12 +71,12 @@ initApp();
 
 async function initApp() {
   await loadApiKey();
-  recognition.start();
+  safeRestartRecognition();
   updateStatus("ESCUCHANDO", "success");
 }
 
 /* ======================================================
-   🔐 CARGAR API KEY
+   🔐 API KEY
 ====================================================== */
 
 async function loadApiKey() {
@@ -77,9 +86,6 @@ async function loadApiKey() {
 
     if (data && data.length > 0) {
       OPENAI_KEY = data[0].apikey;
-      console.log("🔑 API Key cargada correctamente");
-    } else {
-      console.error("No se encontró API key");
     }
   } catch (error) {
     console.error("Error obteniendo API key:", error);
@@ -90,6 +96,30 @@ async function loadApiKey() {
    🎙 RECONOCIMIENTO
 ====================================================== */
 
+recognition.onstart = () => {
+  recognitionActive = true;
+  console.log("🎤 Micrófono activo");
+};
+
+recognition.onend = () => {
+  recognitionActive = false;
+  console.log("🔁 Reiniciando reconocimiento...");
+
+  if (!isSpeaking) {
+    setTimeout(() => {
+      safeRestartRecognition();
+    }, 300);
+  }
+};
+
+recognition.onerror = (event) => {
+  console.log("⚠ Error reconocimiento:", event.error);
+
+  if (event.error !== "not-allowed") {
+    safeRestartRecognition();
+  }
+};
+
 recognition.onresult = async (event) => {
 
   const transcript = event.results[event.results.length - 1][0].transcript
@@ -98,36 +128,19 @@ recognition.onresult = async (event) => {
 
   console.log("🎤", transcript);
 
-  resetSilenceTimer();
-
-  // 🔔 Wake word
-  if (!active && transcript.includes("sofi")) {
-    active = true;
-    updateStatus("ESCUCHANDO", "success");
-    commandText.textContent = "Sistema activado";
-    speak("Sistema activado compadre. Estoy listo para recibir tus órdenes.");
-    return;
-  }
-
-  if (!active) return;
-
-  // 🤠 Presentación del asistente
+  // Presentación
   if (
-    transcript.includes("hola sofi") ||
+    transcript.includes("hola antonio") ||
     transcript.includes("quién eres") ||
-    transcript.includes("que eres") ||
     transcript.includes("qué haces") ||
     transcript.includes("que haces")
   ) {
 
     const intro = `
-Hola, soy sofi.
+Hola, soy Antonio.
 Un asistente de control por voz diseñado para ejecutar comandos específicos.
 Puedo avanzar, retroceder, detener,
 y realizar giros de noventa o trescientos sesenta grados.
-Para activarme solo pronuncia mi nombre.
-Si la orden no es válida,
-responderé orden no reconocida.
 `;
 
     commandText.textContent = "Presentación del asistente";
@@ -135,11 +148,9 @@ responderé orden no reconocida.
     return;
   }
 
-  // 🤖 Procesar comando con OpenAI
   const command = await sendToOpenAI(transcript);
   commandText.textContent = command;
 
-  // 🔊 Respuesta hablada
   if (command !== "Orden no reconocida") {
     speak(`Ejecutando comando ${command}`);
   } else {
@@ -147,18 +158,12 @@ responderé orden no reconocida.
   }
 };
 
-/* ======================================================
-   ⏸ SUSPENSIÓN
-====================================================== */
-
-function resetSilenceTimer() {
-  clearTimeout(silenceTimer);
-  silenceTimer = setTimeout(() => {
-    active = false;
-    updateStatus("SUSPENDIDO", "danger");
-    commandText.textContent = "Modo suspendido";
-    speak("Entrando en modo suspendido.");
-  }, 6000);
+function safeRestartRecognition() {
+  try {
+    recognition.start();
+  } catch (e) {
+    console.log("Ya estaba iniciado");
+  }
 }
 
 function updateStatus(text, color) {
@@ -188,7 +193,9 @@ async function sendToOpenAI(text) {
           {
             role: "system",
             content: `
-Responde SOLO con UNA de estas opciones EXACTAS:
+Eres un sistema que interpreta órdenes de movimiento.
+
+Convierte cualquier frase natural en UNO de estos comandos EXACTOS:
 
 avanzar
 retroceder
@@ -202,7 +209,7 @@ vuelta izquierda
 
 Si no coincide, responde:
 Orden no reconocida
-            `
+`
           },
           { role: "user", content: text }
         ],
@@ -211,7 +218,6 @@ Orden no reconocida
     });
 
     if (!response.ok) {
-      console.error("Error HTTP:", response.status);
       return "Orden no reconocida";
     }
 
